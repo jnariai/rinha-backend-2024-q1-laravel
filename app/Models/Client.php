@@ -18,7 +18,7 @@ class Client extends Model
 
     public function transactions(): HasMany
     {
-        return $this->hasMany(Transaction::class, 'client_id')->orderByDesc('created_at')->limit(10);
+        return $this->hasMany(Transaction::class);
     }
 
 }

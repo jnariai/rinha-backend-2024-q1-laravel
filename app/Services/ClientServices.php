@@ -4,13 +4,15 @@ namespace App\Services;
 
 use App\Models\Client;
 use App\Models\Transaction;
+use Exception;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 
 class ClientServices
 {
 
-    public function getClientById(int $clientId): Client
+    public function getClient(int $clientId): Client
     {
         $client = Client::find($clientId);
 
@@ -21,45 +23,45 @@ class ClientServices
         return $client;
     }
 
-    public function makeTransaction(array $transaction, Client $client): array
+    public function makeTransaction(array $transaction, int $clientId): array
     {
-        $transactionType = $transaction['type'];
+        try {
+            DB::beginTransaction();
+            $queryClient = Client::whereId($clientId);
 
-        $transactionType === 'd' ? $this->processDebitTransaction($transaction['value'], $client) : $this->processCreditTransaction($transaction['value'], $client);
+            if (!$queryClient->exists()) {
+                throw new NotFoundHttpException('Cliente nâo encontrado');
+            }
+            $client = $queryClient->lockForUpdate()->first();
+            $transactionType = $transaction['type'];
 
-        $this->recordTransaction($transaction, $client);
+            if ($transactionType === 'd') {
+                if (!$this->hasLimit($transaction['value'], $client)) {
+                    throw new UnprocessableEntityHttpException('Limite de transação ultrapassado');
+                }
+                $client->balance -= $transaction['value'];
+            } else {
+                $client->balance += $transaction['value'];
+            }
+            $client->save();
+            Transaction::create([
+                'client_id' => $client->id,
+                'value' => $transaction['value'],
+                'type' => $transaction['type'],
+                'description' => $transaction['description']
+            ]);
 
-        return ['limite' => $client->limit, 'saldo' => $client->balance];
-    }
-
-    public function processDebitTransaction(float $value, Client $client): void
-    {
-        if (!$this->hasLimit($value, $client)) {
-            throw new UnprocessableEntityHttpException('Limite de transação ultrapassado');
+            DB::commit();
+            return ['limite' => $client->limit, 'saldo' => $client->balance];
+        } catch (Exception $exception) {
+            DB::rollBack();
+            throw new Exception($exception->getMessage(), $exception->getStatusCode());
         }
-        $client->balance -= $value;
-        $client->save();
     }
 
     public function hasLimit(float $value, Client $client): bool
     {
         return ($client->limit + $client->balance - $value) >= 0;
-    }
-
-    public function processCreditTransaction(float $value, Client $client): void
-    {
-        $client->balance += $value;
-        $client->save();
-    }
-
-    public function recordTransaction(array $transaction, Client $client): void
-    {
-        Transaction::create([
-            'client_id' => $client->id,
-            'value' => $transaction['value'],
-            'type' => $transaction['type'],
-            'description' => $transaction['description']
-        ]);
     }
 
 }
